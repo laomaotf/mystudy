@@ -1,0 +1,47 @@
+#only mining but create army
+#CnnPolicy is the main reason
+game:
+    map: "Simple64"
+    computer:
+        race: Zerg
+        difficulty: Easy
+
+    realtime: False
+
+action: 
+    - "build_SCV"
+    - "build_Supplydepot"
+    - "build_Refinery"
+    - "build_Barracks"
+    - "build_Marine"
+    - "attack_by_Marine"
+    - "attack_by_MarineGroup"
+    - "build_commandCenter"
+    - "patrol_by_marine"
+
+observation: 
+    size : 128
+    color : 
+        mineral_visible : [0,255,0]
+        mineral_invisible : [0,50,0]
+        vespene_geyser_visible : [0,255,0]
+        vespene_geyser_invisible : [0,50,0]
+        structures :  [255,0,0]
+        units : [255,128,0]
+        units_marine : [255,255,0]
+        enemy_structures : [0,0,255]
+        enemy_structures_invisible : [128,128,128]
+        enemy_units : [0,255,255]
+
+
+reward: 
+    attack : 1,
+    result_victory : 10000
+    result_defeat : -10000
+    time : 0
+
+
+train:
+    algname: PPO
+    network: CnnPolicy
+    total_timesteps: 50000

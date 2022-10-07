@@ -1,17 +1,29 @@
+- [SC2](#sc2)
+  - [游戏信息](#游戏信息)
+  - [SC2 APIs](#sc2-apis)
+    - [DeepMind的APIs](#deepmind的apis)
+    - [安装](#安装)
+    - [更加新的APIs](#更加新的apis)
+- [GYM](#gym)
+  - [安装](#安装-1)
+- [baselines3](#baselines3)
+  - [安装](#安装-2)
 
 
-# SC2 游戏信息
+# SC2
+## 游戏信息
 [人族](https://liquipedia.net/starcraft2/Terran_Units_(Legacy_of_the_Void))  
 [神族](https://liquipedia.net/starcraft2/Protoss_Units_(Legacy_of_the_Void))  
 [虫族](https://liquipedia.net/starcraft2/Zerg_Units_(Legacy_of_the_Void))
 
-# SC2 APIs
-
-## DeepMind的APIs
+## SC2 APIs
+### DeepMind的APIs
 [pysc2](https://github.com/deepmind/pysc2)  
 [pysc2-doc](https://raw.githubusercontent.com/deepmind/pysc2/master/docs/environment.md)
 
-## 安装  
+
+
+### 安装  
 推荐python3.8+
 ```bash
 pip install pysc2
@@ -51,8 +63,28 @@ STARCRAFT II
 └─Versions
 ```
 
-## 更加新的APIs
+### 更加新的APIs
 
 [BurnySc2](https://github.com/BurnySc2/python-sc2)   
 [BurnySc2-doc](https://burnysc2.github.io/python-sc2/docs/text_files/introduction.html)
 
+# GYM
+[GYM-APIs](https://github.com/openai/gym)  
+[GYM-doc](https://www.gymlibrary.dev/)
+
+## 安装
+
+```bash
+pip install gym[all]
+```
+
+
+# baselines3
+
+[baselines3](https://github.com/DLR-RM/stable-baselines3)
+[baselines3-doc](https://stable-baselines3.readthedocs.io/en/master/)
+
+## 安装
+```bash
+pip install stable-baselines3[extra]
+```
