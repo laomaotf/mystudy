@@ -19,6 +19,7 @@ import random
 from sc2.unit import Unit
 from sc2.units import Units
 from configs.config import CONFIG
+from utils import logger
                
 class TerrranAI(BotAI):
     async def build_CommandCenter(self):
@@ -253,7 +254,7 @@ class TerrranAI(BotAI):
         if info['flag_debug'] and (info['obs'] is not None):
             vis = cv2.flip(info['obs'],0)
             vis = cv2.resize(vis,(512,512),0,0,interpolation=cv2.INTER_LINEAR)
-            cv2.imshow("obs",vis)
+            cv2.imshow(info['name'],vis)
             cv2.waitKey(1)
             
         #feedback reward
@@ -312,11 +313,12 @@ def main(cfg):
     info['reward'] = reward
     info['obs'] = info['obs'] * 0
     info['terminated'] = True
+    info['result'] = results
     with open("info.dat",'wb') as f:
         pickle.dump(info,f)
     
-    with open("results.txt",'a') as f:
-        f.write(f"{str(results)}\n")
+    # with open("results.txt",'a') as f:
+    #     f.write(f"{str(results)}\n")
         
 if __name__ == "__main__":
     cfg = CONFIG(sys.argv[1])
