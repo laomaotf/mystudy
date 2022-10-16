@@ -210,7 +210,12 @@ class TerrranAI(BotAI):
         for res in self.structures: 
             x,y = res.position.x,res.position.y
             x,y = int(x * win_w / map_w), int(y * win_h / map_h)
-            color = cfg.get('observation.color.structures')
+            if res.type_id == UnitTypeId.BARRACKS:
+                color = cfg.get('observation.color.structures_barracks')
+            elif res.type_id == UnitTypeId.SUPPLYDEPOT:
+                color = cfg.get('observation.color.structures_supplydepot')
+            else:
+                color = cfg.get('observation.color.structures')
             lighting = np.clip(res.health_percentage,0,1)
             info['obs'][y,x] = [int(c*lighting) for c in color]
                 

@@ -25,8 +25,8 @@ observation:
         mineral_invisible : [0,50,0]
         vespene_geyser_visible : [0,255,0]
         vespene_geyser_invisible : [0,50,0]
-        structures :  [255,0,0]
-        units : [255,128,0]
+        structures :  [128,0,0]
+        units : [128,128,0]
         units_marine : [255,255,0]
         enemy_structures : [0,0,255]
         enemy_structures_invisible : [128,128,128]
@@ -34,7 +34,7 @@ observation:
 
 
 reward: 
-    attack : 1,
+    attack : 1
     result_victory : 10000
     result_defeat : -10000
     time : 0

@@ -130,29 +130,37 @@ def train_model_with_env(config_file):
     shutil.copy(config_file,train_output_dir)
     cfg = CONFIG(config_file)
     if cfg.get("train.algname") == "PPO":
-        model = PPO(cfg("train.network"),SC2Env(config_file,flag_debug=True),verbose=1,tensorboard_log=os.path.join(train_output_dir,"tblog"))
+        env = SC2Env(config_file,flag_debug=True)
+        model = PPO(cfg("train.network"),env,verbose=1,tensorboard_log=os.path.join(train_output_dir,"tblog"))
         model.learn(total_timesteps=cfg("train.total_timesteps"),tb_log_name="PPO",reset_num_timesteps=False,
                     eval_log_path=os.path.join(train_output_dir,"log"),
                     callback=callback_save)
         model.save(os.path.join(train_output_dir,"pposc2"))
-
+        env.close()
     return
         
     
-def test_model_with_env(config_file,model_path):
+def test_model_with_env(config_file,model_path,round_total = 10):
     model = PPO.load(os.path.splitext(model_path)[0])
-    env = SC2Env(config_file)
-    obs = env.reset()
-    while True:
-        action, _states = model.predict(obs)
-        obs, rewards, dones, info = env.step(action)
-        env.render()  
-    env.close()
+    results_all = []
+    for round  in range(round_total):
+        env = SC2Env(config_file)
+        obs = env.reset()
+        while True:
+            action, _states = model.predict(obs)
+            obs, rewards, dones, info = env.step(action)
+            env.render()  
+            if dones:
+                results_all.append(info['result'])
+                break
+        env.close()
+    print(results_all)
 
 if __name__ == "__main__":
     logger.info("=====================START =================================") 
     args = parser.parse_args()
     logger.info(f"{args}")
+    args.config = args.config + ".yaml"
     config_file = os.path.join(os.path.dirname(__file__), "configs", args.config)
     if args.what == "train":
         #test_env(config_file)
