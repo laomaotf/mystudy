@@ -1,0 +1,50 @@
+
+game:
+    map: "CollectMineralsAndGas"
+    computer:
+        race: Zerg
+        difficulty: Hard
+
+    realtime: False
+
+action: 
+    - "build_SCV"
+    - "build_Supplydepot"
+    - "build_Refinery"
+    #- "build_Barracks"
+    #- "build_Marine"
+    #- "attack_by_Marine"
+    #- "attack_by_MarineGroup"
+    #- "build_commandCenter"
+    #- "patrol_by_marine"
+
+observation: 
+    size : 128
+    color : 
+        mineral_visible : [0,255,0]
+        mineral_invisible : [0,128,0]
+        vespene_geyser_visible : [0,255,0]
+        vespene_geyser_invisible : [0,128,0]
+
+        structures :  [128,0,0]
+        structures_barracks: [64,0,0,]
+        structures_supplydepot: [96,0,0,]
+        units : [225,225,0]
+        units_marine : [128,128,0]
+
+        enemy_structures : [0,0,255]
+        enemy_structures_invisible : [0,0,50]
+        enemy_units : [0,0,128]
+
+
+reward: 
+    attack : 0.1
+    result_victory : 10000
+    result_defeat : -10000
+    time : 0
+
+
+train:
+    algname: PPO
+    network: MlpPolicy
+    total_timesteps: 200000

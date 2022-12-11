@@ -34,7 +34,8 @@ pip install pysc2
 pip install protobuf==3.20.0
 ```
 
-地图类型有很多种mini-game, melee，各自要放如相应目录才能被APIs访问
+地图类型有很多种mini-game, melee，各自要放如相应目录才能被APIs访问.
+mini-game是经过设计的简单游戏，其中对每一个动作都设置了reward，适合作为一些RL模型的初始研究集合
 ```
 STARCRAFT II  
 ├─Interfaces
