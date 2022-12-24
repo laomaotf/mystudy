@@ -1,6 +1,6 @@
 import torch
 import os,sys
-from dataiter import DATAITER_CLASS as DATA
+from dataiter import *
 from network import NETWORK, calc_loss
 import yaml
 import logging
@@ -8,12 +8,12 @@ import logging
 def train(device,
           lr0,
           traindata_dir, step_num_train, 
-          outdir,model_file,**kwargs):
+          outdir,model_file,dataiter_name,**kwargs):
     network = NETWORK()
     if model_file != "":
         network.load_state_dict(torch.load(model_file))
         print(f"loading model {model_file}")
-    traindata_iter = DATA(traindata_dir,**kwargs) 
+    traindata_iter = eval("{}".format(dataiter_name))(traindata_dir,**kwargs) 
     os.makedirs(outdir,exist_ok=True)
     optimizer = torch.optim.SGD(network.parameters(), lr = lr0, weight_decay=5e-5,momentum=0.9)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=step_num_train, eta_min=1e-9, last_epoch=-1)
@@ -41,9 +41,9 @@ def train(device,
 
             
 if __name__ == "__main__":
-    train("cuda",0.001,r"/val",
-           80000, "run",batch_size=16,width=224,height=224,worker_num=3,
-           model_file='step_31000.pth') 
+    train("cuda",0.01,"/datset/train/",
+           160000, "run",K=128,width=96,height=96,worker_num=3,dataiter_name="DATAITER_IMAGE",
+           model_file='') 
         
         
          

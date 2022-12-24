@@ -9,8 +9,8 @@ import multiprocessing as mp
 import albumentations as A
 from collections import defaultdict
 
-class DATAITER: #each image is one class 
-    def __init__(self, imgdir, width = 112, height = 112, batch_size = 32, worker_num = 2, flag_start_worker = True):
+class DATAITER_IMAGE: #each image is one class 
+    def __init__(self, imgdir, width = 112, height = 112, K = 32, worker_num = 2, keep_color=False, flag_start_worker = True):
         self.imgpaths = []
         for rdir, _, names in os.walk(imgdir):
             names = list(names)
@@ -18,27 +18,47 @@ class DATAITER: #each image is one class
             self.imgpaths.extend(
                 list(map(lambda x: os.path.join(rdir,x),names))
             )
-            
-        self.strong_transforms = A.SomeOf([
-            A.HorizontalFlip(p=1),
-            A.VerticalFlip(p=1),
-            A.Blur(p=1.0,blur_limit=(5,9)),
-            A.RandomBrightnessContrast(p=1),
-            A.Affine(p=1,scale=0.9,translate_percent=0.1,rotate=(-10,10)),
-            A.GridDistortion(p=1,num_steps=8,distort_limit=0.3),
-        ],3,replace=True)
-        self.weak_transforms = A.Compose([
-            A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
-            A.Blur(p=0.5,blur_limit=(5,9)),
-            A.RandomBrightnessContrast(p=0.5),
-            A.Affine(p=0.5,scale=0.9,translate_percent=0.1,rotate=(-10,10)),
-            A.GridDistortion(p=0.5,num_steps=8,distort_limit=0.3),
-        ])
-        
-        
+        self.keep_color = keep_color
+        if self.keep_color:
+            self.strong_transforms = A.SomeOf([
+                A.HorizontalFlip(p=1),
+                A.VerticalFlip(p=1),
+                A.Blur(p=1.0,blur_limit=(5,9)),
+                A.RandomBrightnessContrast(p=1),
+                A.Affine(p=1,scale=0.9,translate_percent=0.1,rotate=(-10,10)),
+                A.GridDistortion(p=1,num_steps=8,distort_limit=0.3),
+            ],3,replace=True)
+            self.weak_transforms = A.Compose([
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.5),
+                A.Blur(p=0.5,blur_limit=(5,9)),
+                A.RandomBrightnessContrast(p=0.5),
+                A.Affine(p=0.5,scale=0.9,translate_percent=0.1,rotate=(-10,10)),
+                A.GridDistortion(p=0.5,num_steps=8,distort_limit=0.3),
+            ])
+        else:
+            self.strong_transforms = A.SomeOf([
+                A.HorizontalFlip(p=1),
+                A.VerticalFlip(p=1),
+                A.Blur(p=1.0,blur_limit=(5,9)),
+                A.RandomBrightnessContrast(p=1),
+                A.Affine(p=1,scale=0.9,translate_percent=0.1,rotate=(-10,10)),
+                A.GridDistortion(p=1,num_steps=8,distort_limit=0.3),
+                A.ChannelShuffle(p=1),
+                A.RGBShift(p=1)
+            ],3,replace=True)
+            self.weak_transforms = A.Compose([
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.5),
+                A.Blur(p=0.5,blur_limit=(5,9)),
+                A.RandomBrightnessContrast(p=0.5),
+                A.Affine(p=0.5,scale=0.9,translate_percent=0.1,rotate=(-10,10)),
+                A.GridDistortion(p=0.5,num_steps=8,distort_limit=0.3),
+                A.ChannelShuffle(p=0.5),
+                A.RGBShift(p=0.5)
+            ])
         self.width,self.height = width, height
-        self.batch_size = batch_size
+        self.K = K
         self.worker_num = 1 if worker_num < 1 else worker_num
         self.batches = mp.Queue(maxsize=worker_num*5)
         self.workers = [mp.Process(target=self.do_jobs) for _ in range(worker_num)]
@@ -63,16 +83,35 @@ class DATAITER: #each image is one class
     
     def get_one_batch(self):  
         batch_data = []
-        for _ in range(self.batch_size):      
-            path_anchor,path_neg = random.sample(self.imgpaths,2) 
-            img_anchor = cv2.resize(cv2.imread(path_anchor,1),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
-            img_pos = self.do_augment(img_anchor,self.strong_transforms)
-            img_neg = cv2.resize(cv2.imread(path_neg,1),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
-            
-            img_anchor = np.expand_dims(img_anchor.transpose(2,0,1),axis=0)
-            img_pos = np.expand_dims(img_pos.transpose(2,0,1),axis=0)
-            img_neg = np.expand_dims(img_neg.transpose(2,0,1),axis=0)
-            batch_data.append( np.concatenate([img_anchor, img_pos, img_neg],axis=0) )
+        paths = random.sample(self.imgpaths,self.K+1) 
+        path_pos = paths[0]
+        paths_neg = paths[1:]
+        
+        batch_data = []
+        for _ in range(self.K):      
+            if self.keep_color:
+                mode = 1
+            else:
+                mode = random.choice([0,1])
+            img = cv2.resize(cv2.imread(path_pos,mode),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)            
+            img = self.do_augment(img,self.strong_transforms)
+            img = np.expand_dims(img.transpose(2,0,1),axis=0)
+            batch_data.append( img )
+       
+        for k in range(self.K):    
+            if self.keep_color:
+                mode = 1
+            else:
+                mode = random.choice([0,1])  
+            img = cv2.resize(cv2.imread(paths_neg[k],mode),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)            
+            img = self.do_augment(img,self.weak_transforms)
+            img = np.expand_dims(img.transpose(2,0,1),axis=0)
+            batch_data.append( img )
+        
         return torch.from_numpy((np.concatenate(batch_data,axis=0) - 128.0)/128.0)
             
     def next(self):
@@ -80,9 +119,11 @@ class DATAITER: #each image is one class
             logging.warning("empty queue")
         return self.batches.get(block=True)
 
-class DATAITER_CLASS(DATAITER): #use folder name as label
-    def __init__(self, imgdir, width=112, height=112, batch_size=32, worker_num=2):
-        super().__init__(imgdir, width, height, batch_size, worker_num,flag_start_worker=False) 
+
+
+class DATAITER_CLASS(DATAITER_IMAGE): #use folder name as label
+    def __init__(self, imgdir, width=112, height=112, K=32, worker_num=2):
+        super().__init__(imgdir, width, height, K, worker_num,flag_start_worker=False) 
         self.imgpaths_class = defaultdict(list)
         for path in self.imgpaths:
             c = path.split(os.path.sep)[-2]
@@ -90,42 +131,55 @@ class DATAITER_CLASS(DATAITER): #use folder name as label
         self.start_worker(True) 
         return
     def get_one_batch(self):
+        class_pos,class_neg = random.sample(self.imgpaths_class.keys(),2) 
+        paths_pos = random.choices(self.imgpaths_class[class_pos],k = self.K)
+        paths_neg = random.choices(self.imgpaths_class[class_neg],k = self.K)
+        
         batch_data = []
-        for _ in range(self.batch_size):      
-            class_anchor,class_neg = random.sample(self.imgpaths_class.keys(),2) 
-            path_anchor, path_pos = random.sample(self.imgpaths_class[class_anchor],2)
-            path_neg = random.sample(self.imgpaths_class[class_neg],1)[0]
-            
-            img_anchor = cv2.resize(cv2.imread(path_anchor,1),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
-            img_pos = cv2.resize(cv2.imread(path_pos,1),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
-            img_pos = self.do_augment(img_pos,self.weak_transforms)
-            img_neg = cv2.resize(cv2.imread(path_neg,1),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
-            
-            img_anchor = np.expand_dims(img_anchor.transpose(2,0,1),axis=0)
-            img_pos = np.expand_dims(img_pos.transpose(2,0,1),axis=0)
-            img_neg = np.expand_dims(img_neg.transpose(2,0,1),axis=0)
-            batch_data.append( np.concatenate([img_anchor, img_pos, img_neg],axis=0) )
-        return torch.from_numpy((np.concatenate(batch_data,axis=0) - 128.0)/128.0)        
-    
+        for path in paths_pos:    
+            if self.keep_color:
+                mode = 1
+            else:
+                mode = random.choice([0,1])                
+            img = cv2.resize(cv2.imread(path,mode),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            img = self.do_augment(img,self.weak_transforms)
+            img = np.expand_dims(img.transpose(2,0,1),axis=0)
+            batch_data.append( img )
+        for path in paths_neg:      
+            if self.keep_color:
+                mode = 1
+            else:
+                mode = random.choice([0,1])               
+            img = cv2.resize(cv2.imread(path,mode),(self.width,self.height),0,0,interpolation=cv2.INTER_AREA)
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)            
+            img = self.do_augment(img,self.weak_transforms)
+            img = np.expand_dims(img.transpose(2,0,1),axis=0)
+            batch_data.append( img )
+        batch_data = (np.concatenate(batch_data,axis=0) - 128.0) / 128.0
+        return torch.from_numpy(batch_data)       
+
           
 def testbed_dataiter():
-    batches = DATAITER_CLASS(r'val')
-    for index in range(10):
+    batches = DATAITER_IMAGE("/dataset/train",worker_num=1)
+    for index in range(2):
         batch_data = np.clip(batches.next().numpy() * 128  + 127,0,255).astype(np.uint8)
-        img_anchor, img_pos, img_neg = batch_data[0], batch_data[1],batch_data[2]
+        K = batch_data.shape[0] //2
+        img_anchor, img_pos = batch_data[0], batch_data[1]
         img_anchor = img_anchor.transpose(1,2,0) 
         img_pos = img_pos.transpose(1,2,0)
-        img_neg = img_neg.transpose(1,2,0)
-        d0 = np.hstack((img_anchor, img_pos, img_neg))
+        d0 = np.hstack((img_anchor, img_pos))
         
-        img_anchor, img_pos, img_neg = batch_data[3], batch_data[4],batch_data[5]
+        img_anchor, img_neg = batch_data[0], batch_data[K]
         img_anchor = img_anchor.transpose(1,2,0)
-        img_pos = img_pos.transpose(1,2,0)
         img_neg = img_neg.transpose(1,2,0)
-        d1 = np.hstack((img_anchor, img_pos, img_neg))
+        d1 = np.hstack((img_anchor, img_neg))
         cv2.imshow("vis",np.vstack([d0,d1]))
         cv2.waitKey(2000)
         print(index)
     del batches
+    
 if __name__=="__main__":
     testbed_dataiter() 

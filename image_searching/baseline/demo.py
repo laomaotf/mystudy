@@ -1,12 +1,9 @@
 import shutil
-from sklearn.utils import shuffle
 import torch
 import pickle
 import os,sys
 import numpy as np
 from network import NETWORK
-import yaml
-import logging
 import cv2
 from rich.progress import track
 from collections import defaultdict
@@ -34,8 +31,10 @@ class FEATDB:
             n = self.db['path'][path]
             return self.db['feat'][n]
         img = cv2.imread(path,1)
+        if len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         img = cv2.resize(img,(self.width,self.height),0,0,cv2.INTER_AREA)
-        img = img.astype(np.float32) / 255 
+        img = (img.astype(np.float32) - 128.0)/128.0
         img = np.expand_dims(np.transpose(img,(2,0,1)),0)
         
         data = torch.from_numpy(img).to(self.device)
@@ -78,26 +77,25 @@ class FEATDB:
     def search(self,query_file,outdir,topk = 9):
         os.makedirs(outdir,exist_ok=True)
         feat = self._generate(query_file)
-        dist = np.linalg.norm(self.db['feat'] - feat,axis=-1)
+        dist = np.linalg.norm(self.db['feat'] - feat,axis=-1,ord=2)
         argrows = np.argsort(dist) 
         paths_found = []
         for k in range(min(topk,len(argrows))):
             paths = self._get_path(argrows[k])
             paths_found.extend(paths)
-        for path in paths_found:
+        for k,path in enumerate(paths_found):
             cls = os.path.split(os.path.split(path)[0])[-1]
-            outpath = os.path.join(outdir, f"{cls}_{os.path.basename(path)}")
+            outpath = os.path.join(outdir, f"{k}_{cls}_{os.path.basename(path)}")
             shutil.copy(path,outpath)
         return
     
     
 if __name__ == "__main__":
-    model_path = os.path.join(os.path.dirname(__file__),"run/step_42000.pth")
-    featdb = FEATDB(model_path,224,224,db_file="/valtest.pkl")
-    featdb.add("/test")
-    featdb.add("/val")
-    featdb.save("/valtest.pkl")
-    featdb.search("/test/000337.jpg","/search_results",topk=100)
+    model_path = os.path.join(os.path.dirname(__file__),"run/step_113000.pth")
+    featdb = FEATDB(model_path,96,96,db_file="valtest.pkl")
+    featdb.add("/dataset/test")
+    featdb.save("valtest.pkl")
+    featdb.search("/dataset/sister_one.png","same_one",topk=50)
     
         
             
