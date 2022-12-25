@@ -35,7 +35,7 @@ def train_model(args):
     env = eval(f"{args.env}.CEnv()")
     model = PPO("MlpPolicy",env,verbose=1,n_steps=args.step_per_env,tensorboard_log=args.output,
                 n_epochs=args.epoch_train_net,batch_size=args.batchsize_train_net,
-                _init_setup_model=True)
+                _init_setup_model=True, policy_kwargs = { "net_arch" : [dict(pi=[128//2, 128//2], vf=[128//2, 128//2])]})
     #if args.model != "":
     #    model.load(args.model)
     model.learn(total_timesteps=args.step_total * args.step_per_env,reset_num_timesteps=True,
