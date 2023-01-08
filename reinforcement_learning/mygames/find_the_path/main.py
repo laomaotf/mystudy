@@ -58,8 +58,8 @@ def play_model(args):
     with open(os.path.join(args.output,"input.json"),'w') as f:
         json.dump(args.__dict__,f,indent=4)
     steps_total = []
+    env = eval(f"{args.env}.CEnv()")
     for round  in range(args.round_test):
-        env = eval(f"{args.env}.CEnv()")
         obs = env.reset()
         steps = 0
         while True:

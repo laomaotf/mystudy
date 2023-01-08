@@ -13,13 +13,18 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.env_checker import check_env
 import random
 from datetime import datetime
+import pickle
+import copy
+
+SAVE_TRAJECTORY = True
+
 class CEnv(gym.Env):
     metadata = {"render_modes":["human"],"render_fps":4}
     def __init__(self):
         super().__init__()
         random.seed(datetime.now().timestamp())
         self.action_names = ["up","down","left","right"]
-        self.map_size = 64
+        self.map_size = 16
         # name of observation_space / action_space is determined by check_env()
         # observation_space is input of alg
         # action_space is output of alg
@@ -27,6 +32,13 @@ class CEnv(gym.Env):
         self.action_space = spaces.Discrete(len(self.action_names))
         self.minimap, self.position = self._build_minimap(size = self.map_size)
         self.apple_position = self._put_apple()
+        self.epoch = 0
+        self.trajectory = {
+            "size":self.minimap.shape,
+            "apple": [],
+            "player": [],
+            "bomb": []
+        }
     def _put_apple(self):
         return random.randint(self.map_size//2,self.map_size-3), random.randint(3, self.map_size-3)
     def _build_minimap(self,size = 64):
@@ -112,26 +124,48 @@ class CEnv(gym.Env):
         reward = 0.0
         gameover = False
         if y == apple_y and x == apple_x:
-            reward = 500
+            reward = 100
             self.apple_position = self._put_apple()
         elif self.minimap[y,x] != 0 : #failed
             reward = -500
             gameover = True
         else:
-            reward = 1.0 +  self._calc_apple_adv(self.position) * 100 #数量级的差异
+            reward = 1.0 +  self._calc_apple_adv(self.position) * 50 #数量级的差异
         self.render()
         return obs, reward, gameover, {} 
              
     def reset(self):
+        self.epoch += 1
+        if self.epoch > 1:
+            os.makedirs("trajectories",exist_ok=True)
+            with open(os.path.join("trajectories",f"dodgeball_ep{self.epoch-1}.pkl"),"wb") as f:
+                pickle.dump(self.trajectory,f)
+        
         random.seed(datetime.now().timestamp())
         self.minimap, self.position = self._build_minimap(size = self.map_size)
         self.apple_position = self._put_apple()
         obs = self._get_obs(self.position)
+        self.trajectory = {
+            "size":self.minimap.shape,
+            "apple": [],
+            "player": [],
+            "bomb": []
+        }
         return obs
-    
+    def expand_trajectory(self):
+        self.trajectory["size"] = self.minimap.shape
+        self.trajectory['apple'].append(self.apple_position)
+        self.trajectory['player'].append(self.position)
+        self.trajectory['bomb'].append(copy.deepcopy(self.minimap))
+        return
+        
     def render(self,mode="human"):
         if mode != "human":
             raise Exception(f"mode must be human")
+        
+        if SAVE_TRAJECTORY:
+            self.expand_trajectory()
+        
         h,w = self.minimap.shape
         R = 10
         H,W = h * R, w * R
