@@ -81,7 +81,7 @@ def play_epochs(args):
         pickle.dump(results,f)
     
 def calc_fitness_fast(agents,epoch_total = 100):
-    thread_num = 4
+    thread_num = 8
     pool = mp.Pool(thread_num)
     params = []
     epoch_step = epoch_total // thread_num
@@ -174,7 +174,7 @@ def calc_fitness_debug(agents,epoch_total = 100):
     return epochs_keep_living / epoch_total
             
 def calc_fitness(agents,epoch_total = 100):
-    return calc_fitness_debug(agents,epoch_total=epoch_total)
+    return calc_fitness_fast(agents,epoch_total=epoch_total)
  
 def select_mating_pool(pop, fitness, num_parents):
     # Selecting the best individuals in the current generation as parents for producing the offspring of the next generation.
@@ -242,7 +242,7 @@ def main():
         # Measuring the fitness of each chromosome in the population.
         fitness = calc_fitness(new_population)
         T = time.time() - startT
-        print('generation={}, max fitness={:.4f}, average fitness={:.4f} time elapsed={:.2f}min'.format(generation+1,np.max(fitness),np.mean(fitness),T/60))
+        print('generation={}, fitness: max={:.4f}, average={:.4f} time elapsed={:.2f}min'.format(generation+1,np.max(fitness),np.mean(fitness),T/60))
         saveGeneration(os.path.join(outdir,"{}_{:.4f}.json".format(generation+1, np.mean(fitness))), new_population, fitness)
 
         
