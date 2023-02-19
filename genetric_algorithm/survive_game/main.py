@@ -14,8 +14,7 @@ POPULATION_SIZE = 200
 
 WEIGHT_MIN, WEIGHT_MAX, WEIGHT_STEP = -1.0,1.0,0.01
 
-GENERATION_TOTAL = 10000
-MATING_TOTAL = max([int(POPULATION_SIZE * 0.05),2])
+GENERATION_TOTAL = 500
 
 WORLD_SIZE = 50
 FOOD_CAPACITY = int(WORLD_SIZE / 2)
@@ -210,13 +209,13 @@ def crossover(parents, offspring_size):
     return offspring
 
 
-def mutation(offspring_crossover):
+def mutation(offspring_crossover,scale = 0.1):
     # mutating the offsprings generated from crossover to maintain variation in the population
     
     for idx in range(offspring_crossover.shape[0]):
         for _ in range(AGENT_WEIGHT_DIM): #make mutation for some genes
             random_indice = random.randint(0,offspring_crossover.shape[1]-1)
-            random_value = np.random.choice(np.arange(WEIGHT_MIN/10,WEIGHT_MAX/10,step=WEIGHT_STEP/10),size=(1),replace=False)
+            random_value = np.random.choice(np.arange(WEIGHT_MIN * scale,WEIGHT_MAX * scale,step=WEIGHT_STEP*scale),size=(1),replace=False)
             offspring_crossover[idx, random_indice] = np.clip(offspring_crossover[idx, random_indice] + random_value,
                                                               WEIGHT_MIN,WEIGHT_MAX)
     offspring_crossover = np.clip(offspring_crossover,WEIGHT_MIN,WEIGHT_MAX)
@@ -233,32 +232,57 @@ def saveGeneration(path, pops, fitnesses):
         json.dump(json_content,f)
     return
 
+def loadGeneration(path):
+    with open(path,"r") as f:
+        json_content = json.load(f)
+    population = []
+    for data in json_content:
+        if 'pop' not in data.keys():
+            continue
+        population.append(data['pop'])
+    return np.reshape(population,(POPULATION_SIZE,AGENT_WEIGHT_DIM))
+     
+
 def main(): 
     outdir = os.path.join("output")
     os.makedirs(outdir,exist_ok=True) 
-    new_population = np.random.choice(np.arange(WEIGHT_MIN,WEIGHT_MAX,step=WEIGHT_STEP),size=(POPULATION_SIZE, AGENT_WEIGHT_DIM),replace=True)
+    if os.path.exists("pretrained.json"):
+        new_population = loadGeneration("pretrained.json")
+        print("start with pretrained weights")
+    else:
+        new_population = np.random.choice(np.arange(WEIGHT_MIN,WEIGHT_MAX,step=WEIGHT_STEP),size=(POPULATION_SIZE, AGENT_WEIGHT_DIM),replace=True)
+        print("start with random weights")
     startT = time.time()
     for generation in range(GENERATION_TOTAL):
         # Measuring the fitness of each chromosome in the population.
         fitness = calc_fitness(new_population)
         T = time.time() - startT
-        print('generation={}, fitness: max={:.4f}, average={:.4f} time elapsed={:.2f}min'.format(generation+1,np.max(fitness),np.mean(fitness),T/60))
-        saveGeneration(os.path.join(outdir,"{}_{:.4f}.json".format(generation+1, np.mean(fitness))), new_population, fitness)
+        max_fitness = np.max(fitness)
+        avg_fitness = np.mean(fitness)
+        std_fitness = np.std(fitness)
+        saveGeneration(os.path.join(outdir,"{}_{:.4f}.json".format(generation+1, avg_fitness)), new_population, fitness)
 
         
         # Selecting the best parents in the population for mating.
-        parents = select_mating_pool(new_population, fitness, MATING_TOTAL)
+        matting_total = int(0.3 * (1 - generation * 1.0 / GENERATION_TOTAL) * POPULATION_SIZE)
+        matting_total = max([matting_total,10])
+        parents = select_mating_pool(new_population, fitness, matting_total)
 
         # Generating next generation using crossover.
         offspring_crossover = crossover(parents, offspring_size=(POPULATION_SIZE - parents.shape[0], AGENT_WEIGHT_DIM))
 
         # Adding some variations to the offsrping using mutation.
-        offspring_mutation = mutation(offspring_crossover)
+        mutation_scale = 0.1 * (1 - generation * 1.0 / GENERATION_TOTAL) + 0.001
+        offspring_mutation = mutation(offspring_crossover, scale=mutation_scale)
 
         # Creating the new population based on the parents and offspring.
         new_population[0:parents.shape[0], :] = parents
         new_population[parents.shape[0]:, :] = offspring_mutation
     
+        print('GEN:{}, fitness:{:.4f},{:.4f},{:.4f} matting:{} mutation:{:.3f} {:.2f}H'.format(
+            generation+1,max_fitness,avg_fitness, std_fitness,matting_total, mutation_scale,
+            T/3600.0))
+
     T = time.time() - startT
     logging.info("run {} generations within {:.2f}min".format(GENERATION_TOTAL,T/60))
        
