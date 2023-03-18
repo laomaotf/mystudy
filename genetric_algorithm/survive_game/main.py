@@ -3,87 +3,169 @@ import logging,time
 import numpy as np
 import json
 import cv2
+import copy
+import datetime
 from rich.progress import track
 import multiprocessing as mp
 import pickle
+import shutil
+from torch.utils.tensorboard import SummaryWriter
+
+MAKE_WORLD_EASY = False
 
 VISUAL_SCALE = 10
 
 # Defining the population size.
-POPULATION_SIZE = 200
 
-WEIGHT_MIN, WEIGHT_MAX, WEIGHT_STEP = -1.0,1.0,0.01
+VIEW_SIZE = 5
 
-GENERATION_TOTAL = 500
+GENERATION_TOTAL = 3000
 
 WORLD_SIZE = 50
 FOOD_CAPACITY = int(WORLD_SIZE / 2)
 DAYTIME = WORLD_SIZE * 3
-AGENT_IN_DIM = FOOD_CAPACITY * 2 + 1 + 1 + 2 #FOOD(x,y), DAYTIME,reward position
+#AGENT_IN_DIM = FOOD_CAPACITY * 2 + 1 + 1 + 2 #FOOD(x,y), DAYTIME,reward position
+
+AGENT_IN_DIM =  2*(VIEW_SIZE*2+1)**2 + 2 + 1
 AGENT_OUT_DIM = 2 #dx,dy
 
-AGENT_WEIGHT_DIM = AGENT_IN_DIM * AGENT_OUT_DIM
 
+POPULATION_SIZE = FOOD_CAPACITY
 
-def get_action(obs,weights):
-    model = weights.reshape((AGENT_OUT_DIM, AGENT_IN_DIM)).astype(np.float32)
-    input = obs.astype(np.float32) 
-    dx,dy = model @ input
-    if dx >= 0:
-        dx = 1
-    else:
-        dx = -1
+HIDDEN_DIM = (AGENT_IN_DIM + AGENT_OUT_DIM) // 2  + AGENT_OUT_DIM
+AGENT_WEIGHT_DIM = AGENT_IN_DIM * HIDDEN_DIM + HIDDEN_DIM * AGENT_OUT_DIM
+
+NUM_WORKER = 4
+
+class GENE:
+    def __init__(self,seeds,sigma=0.005):
+        np.random.seed(seeds[0])
+        self.dna = np.random.uniform(low=-1,high=1,size=(AGENT_WEIGHT_DIM,))
+        for seed in seeds[1:]:
+            np.random.seed(seed)
+            self.dna += sigma * np.random.uniform(low=-1,high=1,size=(AGENT_WEIGHT_DIM,))
+        return
+    def get_act(self,obs):
+        w01 = self.dna[0:AGENT_IN_DIM * HIDDEN_DIM]
+        w01 = w01.reshape(HIDDEN_DIM, AGENT_IN_DIM).astype(np.float32)
+        w12 = self.dna[HIDDEN_DIM * AGENT_IN_DIM:]
+        w12 = w12.reshape(AGENT_OUT_DIM, HIDDEN_DIM).astype(np.float32)
+        input = obs.astype(np.float32) 
+        hidden = w01 @ input
+        hidden = 0.5 * (np.abs(hidden) + hidden)
+        dx,dy = w12 @ hidden 
+        if dx >= 0:
+            dx = 1
+        else:
+            dx = -1
+            
+        if dy >= 0:
+            dy = 1
+        else:
+            dy = -1
+        return dx, dy
+
+class AGENT(GENE):
+    def __init__(self, seeds, sigma=0.005):
+        super().__init__(seeds, sigma)
+        #using seeds[-1] here
+        self.x = random.randint(0, WORLD_SIZE-1)
+        self.y = random.randint(0, WORLD_SIZE-1)
+        self.rew = 0
+    def step(self,obs):
+        dx,dy = self.get_act(obs)
+        self.x, self.y = int(self.x + dx)%WORLD_SIZE, int(self.y + dy)%WORLD_SIZE
+        return
+    def add_reward(self,rew):
+        self.rew += rew
+        return
+
+def visual_world(world,agents,t):
+    image_world = (world * 255).astype(np.uint8)
+    image_world = cv2.cvtColor(image_world,cv2.COLOR_GRAY2BGR)
+    H,W = image_world.shape[0:2]
+    image_world = cv2.resize(image_world,(W*VISUAL_SCALE,H*VISUAL_SCALE),interpolation=cv2.INTER_NEAREST)
+    for k in range(len(agents)):
+        x,y = agents[k].x * VISUAL_SCALE, agents[k].y * VISUAL_SCALE
+        rew = agents[k].rew 
+        if rew > 0:
+            cv2.circle(image_world,(x,y),VISUAL_SCALE//2,(0,255,0),1)
+        else:
+            cv2.circle(image_world,(x,y),VISUAL_SCALE//2,(0,255,255),1)
+    cv2.putText(image_world,f"{t}",(20,20),cv2.FONT_HERSHEY_COMPLEX,1.5,(128,128,128))
+    cv2.imshow("world",image_world)
+    cv2.waitKey(1) 
+    
+def get_obs_local(world,agents,index_anchor,t):
+    ax,ay = agents[index_anchor].x, agents[index_anchor].y
+    obs_world = []
+    for y in range(ay - VIEW_SIZE, ay+VIEW_SIZE+1):
+        for x in range(ax - VIEW_SIZE, ax + VIEW_SIZE+1):
+            nx,ny = x%WORLD_SIZE, y%WORLD_SIZE
+            obs_world.append( world[ny,nx] )
+    obs_others = np.zeros((2*VIEW_SIZE+1,2*VIEW_SIZE+1))
+    for k in range(len(agents)):
+        dx,dy = agents[k].x - ax, agents[k].y - ay
+        if abs(dx) > VIEW_SIZE or abs(dy) > VIEW_SIZE: 
+            continue
+        obs_others[dy+VIEW_SIZE,dx+VIEW_SIZE] += 1 #count number of other players
+    obs_others = obs_others.flatten().tolist()
+    return obs_world + obs_others + [ax,ay,t]
         
-    if dy >= 0:
-        dy = 1
-    else:
-        dy = -1
-    return dx, dy
-
-def play_one_epoch(epoch,agents):
-    agent_num = len(agents)
+        
+        
+            
+    
+        
+def play_one_epoch(epoch,pops,seed,flag_visual):
+    agents = []
+    for pop in pops:
+        agent = AGENT(pop)
+        agents.append(agent)
+    random.seed(seed)
+    agents_num = len(agents)
     world = [1 for _ in range(FOOD_CAPACITY)] + [0 for _ in range(WORLD_SIZE*WORLD_SIZE - FOOD_CAPACITY)]
+    if MAKE_WORLD_EASY:
+        random.seed(42) ###########################################
     random.shuffle(world)
-    keep_living = np.zeros(agent_num)
+    keep_living = np.zeros(agents_num)
     world = np.array(world,dtype=np.int32).reshape((WORLD_SIZE,WORLD_SIZE))
-    xs_agent = np.random.choice([k for k in range(WORLD_SIZE)],size=agent_num)
-    ys_agent = np.random.choice([k for k in range(WORLD_SIZE)],size=agent_num)
-    rewards_agent = np.zeros(agent_num)
     for t in range(DAYTIME-1,0,-1):
-        for agt_k in range(agent_num):
-            xy_food = np.array(np.argwhere(world == 1)).reshape((-1,2)).flatten().tolist()
-            if len(xy_food) < 2 * FOOD_CAPACITY:
-                xy_food = xy_food + [-1 for _ in range(2 * FOOD_CAPACITY - len(xy_food))]
-            xy_agent = np.array([xs_agent[agt_k],ys_agent[agt_k]]).reshape((1,2)).flatten().tolist()
-            obs = np.array(xy_food + [t] + [rewards_agent[agt_k]] + xy_agent).reshape((-1,1))
-            dx,dy = get_action(obs, agents[agt_k]) 
-            xs_agent[agt_k] = int(xs_agent[agt_k] + dx) % WORLD_SIZE
-            ys_agent[agt_k] = int(ys_agent[agt_k] + dy) % WORLD_SIZE
-            # xs_agent[agt_k] = max([0,int(xs_agent[agt_k] + dx)])
-            # ys_agent[agt_k] = max([0,int(ys_agent[agt_k] + dy)])
-            # xs_agent[agt_k] = min([WORLD_SIZE-1, xs_agent[agt_k]])
-            # ys_agent[agt_k] = min([WORLD_SIZE-1, ys_agent[agt_k]])
-            rewards_agent[agt_k] += world[ys_agent[agt_k], xs_agent[agt_k]] 
-            world[ys_agent[agt_k], xs_agent[agt_k]] = 0 #eat food if exist
-    for agt_k in range(agent_num):
-        if rewards_agent[agt_k] > 0 and xs_agent[agt_k] * ys_agent[agt_k] == 0:
+        for agt_k in range(agents_num):
+            if 0: #global obs
+                xy_food = np.array(np.argwhere(world == 1)).reshape((-1,2)).flatten().tolist()
+                if len(xy_food) < 2 * FOOD_CAPACITY:
+                    xy_food = xy_food + [-1 for _ in range(2 * FOOD_CAPACITY - len(xy_food))]
+                xy_agent = np.array([agents[agt_k].x, agents[agt_k].y]).reshape((1,2)).flatten().tolist()
+                obs = np.array(xy_food + [t] + [agents[agt_k].rew] + xy_agent).reshape((-1,1))
+            else:
+                obs = get_obs_local(world,agents,agt_k,t)
+                obs = np.array(obs).reshape((-1,1)) 
+            agents[agt_k].step(obs)
+            agents[agt_k].add_reward( world[agents[agt_k].y, agents[agt_k].x]  )
+            world[agents[agt_k].y, agents[agt_k].x] = 0 #eat food if exist
+        if flag_visual and epoch < 2:
+            visual_world(world,agents,t)
+            
+    for agt_k in range(agents_num):
+        if agents[agt_k].rew > 0 and agents[agt_k].x * agents[agt_k].y == 0:
             keep_living[agt_k] += 1
     return epoch,keep_living  
 
 def play_epochs(args):
-    pid,epochs,agents = args
+    pid,epochs,pops = args
     results = []
     for epoch in epochs:
-        result = play_one_epoch(epoch,agents)
+        seed = int(time.time() + pid)
+        result = play_one_epoch(epoch,pops,seed,pid==0)
         results.append(result)
     with open(f"{pid}.pkl",'wb') as f:
         pickle.dump(results,f)
     
 def calc_fitness_fast(agents,epoch_total = 100):
-    thread_num = 8
-    pool = mp.Pool(thread_num)
+    pool = mp.Pool(NUM_WORKER)
     params = []
-    epoch_step = epoch_total // thread_num
+    epoch_step = epoch_total // NUM_WORKER
     pids = []
     for pid,epoch in enumerate(range(0,epoch_total,epoch_step)):
         pids.append(pid) 
@@ -91,9 +173,12 @@ def calc_fitness_fast(agents,epoch_total = 100):
         if os.path.exists(path):
             os.remove(path)
         params.append((pid,[k for k in range(epoch,epoch+epoch_step,1)],agents))
-    pool.map(play_epochs,params)
-    pool.close()
-    pool.join()
+    if NUM_WORKER == 1:
+        play_epochs(*params)
+    else:
+        pool.map(play_epochs,params)
+        pool.close()
+        pool.join()
     results = []
     for pid in pids:
         with open(f"{pid}.pkl", 'rb') as f:
@@ -102,132 +187,36 @@ def calc_fitness_fast(agents,epoch_total = 100):
     epochs_keep_living = np.zeros(len(agents))
     for _,res in results:
         epochs_keep_living += res
-    return epochs_keep_living / len(results)
+    return (epochs_keep_living / len(results)).tolist()
     
-def calc_fitness_debug(agents,epoch_total = 100):
-    epochs_keep_living = np.zeros(len(agents))
-    for epoch in track(range(epoch_total),description="evaulation"):
-        world = [1 for _ in range(FOOD_CAPACITY)] + [0 for _ in range(WORLD_SIZE*WORLD_SIZE - FOOD_CAPACITY)]
-        random.shuffle(world)
-        world = np.array(world,dtype=np.int32).reshape((WORLD_SIZE,WORLD_SIZE))
-        xs_agent = np.random.choice([k for k in range(WORLD_SIZE)],size=len(agents))
-        ys_agent = np.random.choice([k for k in range(WORLD_SIZE)],size=len(agents))
-        rewards_agent = np.zeros(len(agents))
-        if VISUAL_SCALE > 0:
-            world_vis = (world.copy() * 255).astype(np.uint8)
-            world_vis = cv2.cvtColor(world_vis,cv2.COLOR_GRAY2BGR)
-            world_vis = cv2.resize(world_vis,(0,0),fx=VISUAL_SCALE, fy = VISUAL_SCALE, interpolation=cv2.INTER_NEAREST)
-        for t in range(DAYTIME-1,0,-1):
-            for agt_k in range(len(agents)):
-                xy_food = np.array(np.argwhere(world == 1)).reshape((-1,2)).flatten().tolist()
-                if len(xy_food) < 2 * FOOD_CAPACITY:
-                    xy_food = xy_food + [-1 for _ in range(2 * FOOD_CAPACITY - len(xy_food))]
-                xy_agent = np.array([xs_agent[agt_k],ys_agent[agt_k]]).reshape((1,2)).flatten().tolist()
-                obs = np.array(xy_food + [t] + [rewards_agent[agt_k]] + xy_agent).reshape((-1,1))
-                dx,dy = get_action(obs, agents[agt_k]) 
-                xs_agent[agt_k] = int(xs_agent[agt_k] + dx) % WORLD_SIZE
-                ys_agent[agt_k] = int(ys_agent[agt_k] + dy) % WORLD_SIZE
-                # xs_agent[agt_k] = max([0,int(xs_agent[agt_k] + dx)])
-                # ys_agent[agt_k] = max([0,int(ys_agent[agt_k] + dy)])
-                # xs_agent[agt_k] = min([WORLD_SIZE-1, xs_agent[agt_k]])
-                # ys_agent[agt_k] = min([WORLD_SIZE-1, ys_agent[agt_k]])
-                rewards_agent[agt_k] += world[ys_agent[agt_k], xs_agent[agt_k]] 
-                world[ys_agent[agt_k], xs_agent[agt_k]] = 0 #eat food if exist
-                if VISUAL_SCALE > 0 and epoch == epoch_total - 1:
-                    world_vis = (world.copy() * 255).astype(np.uint8)
-                    world_vis = cv2.cvtColor(world_vis,cv2.COLOR_GRAY2BGR)
-                    world_vis = cv2.resize(world_vis,(0,0),fx=VISUAL_SCALE, fy = VISUAL_SCALE, interpolation=cv2.INTER_NEAREST)
-                    sorted_idx = np.argsort(rewards_agent)
-                    for k in sorted_idx:
-                        x,y,r = xs_agent[k],ys_agent[k],rewards_agent[k]
-                        ix, iy = int(x * VISUAL_SCALE), int(y * VISUAL_SCALE)
-                        cv2.putText(world_vis,f"{t}",(10,50),cv2.FONT_HERSHEY_COMPLEX,1.0,(100,100,100))
-                        if r > 0:
-                            color = (0,255,0)
-                        else:
-                            color = (0,0,255)
-                        cv2.circle(world_vis, (ix,iy), int(VISUAL_SCALE)//2, color, 2)
-                    cv2.imshow("evaulation",world_vis)
-                    cv2.waitKey(1)
-        if VISUAL_SCALE > 0 and epoch == epoch_total - 1:
-            world_vis = (world.copy() * 255).astype(np.uint8)
-            world_vis = cv2.cvtColor(world_vis,cv2.COLOR_GRAY2BGR)
-            world_vis = cv2.resize(world_vis,(0,0),fx=VISUAL_SCALE, fy = VISUAL_SCALE, interpolation=cv2.INTER_NEAREST)
-        for agt_k in range(len(agents)):
-            if rewards_agent[agt_k] > 0 and xs_agent[agt_k] * ys_agent[agt_k] == 0:
-                epochs_keep_living[agt_k] += 1
-                if VISUAL_SCALE > 0 and epoch == epoch_total - 1:
-                    x,y = xs_agent[agt_k],ys_agent[agt_k]
-                    ix, iy = int(x * VISUAL_SCALE), int(y * VISUAL_SCALE)
-                    cv2.circle(world_vis, (ix,iy), VISUAL_SCALE//2, (0,255,0), 2)
-            else:
-                if VISUAL_SCALE > 0 and epoch == epoch_total - 1:
-                    x,y = xs_agent[agt_k],ys_agent[agt_k] 
-                    ix, iy = int(x * VISUAL_SCALE), int(y * VISUAL_SCALE)
-                    cv2.circle(world_vis, (ix,iy), 1, (128,128,128), 1)
-        if VISUAL_SCALE > 0 and epoch == epoch_total - 1:
-            cv2.imshow("result",world_vis)
-            cv2.waitKey(1)
-    if VISUAL_SCALE > 0: 
-        cv2.destroyAllWindows()
-    return epochs_keep_living / epoch_total
-            
 def calc_fitness(agents,epoch_total = 100):
     return calc_fitness_fast(agents,epoch_total=epoch_total)
+
  
-def select_mating_pool(pop, fitness, num_parents):
-    # Selecting the best individuals in the current generation as parents for producing the offspring of the next generation.
-    parents = []
-    while True:
-        mf = np.max(fitness)
-        if mf < 0.0001 or len(parents) >= num_parents:
-            break
-        max_fitness_idx = np.argwhere(fitness == mf)
-        for idx in max_fitness_idx:
-            parents.append( pop[idx[0], :].flatten().tolist() )
-            fitness[idx[0]] = -99999999
-    return np.array(parents).reshape((-1,AGENT_WEIGHT_DIM))
+def select_survivors(pops, fitness, num_survivors, num_genius):
+    survivors, geniuses = [],[]
+    fitness_survivors, fitness_geniuses = [], []
+    indices = np.argsort(fitness)[::-1]
+    for n in range(num_genius):
+        i = indices[n]
+        geniuses.append(copy.deepcopy(pops[i]))
+        fitness_geniuses.append(fitness[i])
+    for n in range(num_survivors):
+        i = indices[n]
+        survivors.append(copy.deepcopy(pops[i]))
+        fitness_survivors.append(fitness[i])
+    return geniuses,fitness_geniuses, survivors, fitness_survivors
 
-def crossover(parents, offspring_size):
-    # creating children for next generation 
-    if parents.shape[0] == 1:
-        return parents.copy()
-    offspring = np.empty(offspring_size)
-    for k in range(offspring_size[0]): 
-        while True:
-            parent1_idx = random.randint(0, parents.shape[0] - 1)
-            parent2_idx = random.randint(0, parents.shape[0] - 1)
-            # produce offspring from two parents if they are different
-            if parent1_idx == parent2_idx:
-                continue
-            for j in range(offspring_size[1]):
-                if random.uniform(0, 1) < 0.5:
-                    offspring[k, j] = parents[parent1_idx, j]
-                else:
-                    offspring[k, j] = parents[parent2_idx, j]
-            break
-    return offspring
-
-
-def mutation(offspring_crossover,scale = 0.1):
-    # mutating the offsprings generated from crossover to maintain variation in the population
-    
-    for idx in range(offspring_crossover.shape[0]):
-        for _ in range(AGENT_WEIGHT_DIM): #make mutation for some genes
-            random_indice = random.randint(0,offspring_crossover.shape[1]-1)
-            random_value = np.random.choice(np.arange(WEIGHT_MIN * scale,WEIGHT_MAX * scale,step=WEIGHT_STEP*scale),size=(1),replace=False)
-            offspring_crossover[idx, random_indice] = np.clip(offspring_crossover[idx, random_indice] + random_value,
-                                                              WEIGHT_MIN,WEIGHT_MAX)
-    offspring_crossover = np.clip(offspring_crossover,WEIGHT_MIN,WEIGHT_MAX)
-    return offspring_crossover
+def new_generation(pops,num):
+    indices = np.random.choice(range(len(pops)),size=num)
+    offsprings = []
+    for i in indices:
+        pop = copy.deepcopy(pops[i]) + [random.randrange(0,2**31)]
+        offsprings.append(pop)
+    return offsprings
 
 def saveGeneration(path, pops, fitnesses):
-    json_content = [] 
-    pop_num, pop_dim = pops.shape
-    json_content.append({"num":pop_num,"dim":pop_dim})
-    for pop, fitness in zip(pops, fitnesses):
-        pop = pop.tolist()
-        json_content.append({"pop":pop, 'fit':fitness})
+    json_content = {"pops":pops, "fitness":fitnesses}
     with open(path.format(path),'w') as f:
         json.dump(json_content,f)
     return
@@ -235,56 +224,50 @@ def saveGeneration(path, pops, fitnesses):
 def loadGeneration(path):
     with open(path,"r") as f:
         json_content = json.load(f)
-    population = []
-    for data in json_content:
-        if 'pop' not in data.keys():
-            continue
-        population.append(data['pop'])
-    return np.reshape(population,(POPULATION_SIZE,AGENT_WEIGHT_DIM))
-     
+    pops = json_content['pops'] 
+    return pops 
 
 def main(): 
-    outdir = os.path.join("output")
+    now = datetime.datetime.now()
+    outdir = os.path.join("output","{}{}{}_{}-{}".format(now.year,now.month,now.day,now.hour,now.minute))
     os.makedirs(outdir,exist_ok=True) 
+    shutil.copy(__file__,outdir)
+    writer = SummaryWriter(log_dir=os.path.join(outdir,"tblog"),flush_secs=120)
     if os.path.exists("pretrained.json"):
-        new_population = loadGeneration("pretrained.json")
+        pops = loadGeneration("pretrained.json")
         print("start with pretrained weights")
     else:
-        new_population = np.random.choice(np.arange(WEIGHT_MIN,WEIGHT_MAX,step=WEIGHT_STEP),size=(POPULATION_SIZE, AGENT_WEIGHT_DIM),replace=True)
-        print("start with random weights")
+        pops = []
+        np.random.seed(int(time.time()))
+        for _ in range(POPULATION_SIZE):
+            pops.append([random.randint(0,2**31)])
+        print("start from scratch")
+    geniuses_last = {
+        "pops":[],
+        "fitness":[]
+    }
     startT = time.time()
     for generation in range(GENERATION_TOTAL):
-        # Measuring the fitness of each chromosome in the population.
-        fitness = calc_fitness(new_population)
+        fitness = calc_fitness(pops)
         T = time.time() - startT
-        max_fitness = np.max(fitness)
-        avg_fitness = np.mean(fitness)
-        std_fitness = np.std(fitness)
-        saveGeneration(os.path.join(outdir,"{}_{:.4f}.json".format(generation+1, avg_fitness)), new_population, fitness)
-
+        geniuses, fitness_geniuses, survivors,fitness_survivors = select_survivors(pops + geniuses_last['pops'],
+                                                                             fitness + geniuses_last['fitness'],
+                                                                             POPULATION_SIZE//4,2)
+        pops = new_generation(survivors,POPULATION_SIZE)
+        geniuses_last['pops'], geniuses_last['fitness'] = geniuses, fitness_geniuses   
+        max_fitness = np.max(fitness_survivors)
+        avg_fitness = np.mean(fitness_survivors)
+        std_fitness = np.std(fitness_survivors)
+        writer.add_scalars(main_tag="fitness",tag_scalar_dict={
+            "max":max_fitness, "avg":avg_fitness,"std":std_fitness
+        },global_step=generation+1) 
         
-        # Selecting the best parents in the population for mating.
-        matting_total = int(0.3 * (1 - generation * 1.0 / GENERATION_TOTAL) * POPULATION_SIZE)
-        matting_total = max([matting_total,10])
-        parents = select_mating_pool(new_population, fitness, matting_total)
-
-        # Generating next generation using crossover.
-        offspring_crossover = crossover(parents, offspring_size=(POPULATION_SIZE - parents.shape[0], AGENT_WEIGHT_DIM))
-
-        # Adding some variations to the offsrping using mutation.
-        mutation_scale = 0.1 * (1 - generation * 1.0 / GENERATION_TOTAL) + 0.001
-        offspring_mutation = mutation(offspring_crossover, scale=mutation_scale)
-
-        # Creating the new population based on the parents and offspring.
-        new_population[0:parents.shape[0], :] = parents
-        new_population[parents.shape[0]:, :] = offspring_mutation
-    
-        print('GEN:{}, fitness:{:.4f},{:.4f},{:.4f} matting:{} mutation:{:.3f} {:.2f}H'.format(
-            generation+1,max_fitness,avg_fitness, std_fitness,matting_total, mutation_scale,
-            T/3600.0))
-
+        print('genenration:{}, fitness:{:.4f},{:.4f},{:.4f}, {:.2f}H'.format(
+            generation+1,max_fitness,avg_fitness, std_fitness,T/3600.0))
+        saveGeneration(os.path.join(outdir,"{}_{:.4f}.json".format(generation+1, avg_fitness)), survivors, fitness_survivors)
     T = time.time() - startT
     logging.info("run {} generations within {:.2f}min".format(GENERATION_TOTAL,T/60))
+    writer.close()
        
 
 if __name__=="__main__":
