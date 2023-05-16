@@ -14,7 +14,9 @@ from datetime import datetime
 import pickle
 import copy
 
-SAVE_TRAJECTORY = True
+SAVE_TRAJECTORY = False
+
+USE_IMAGE_OBS = True
 
 class CEnv(gym.Env):
     metadata = {"render_modes":["human"],"render_fps":4}
@@ -26,7 +28,11 @@ class CEnv(gym.Env):
         # name of observation_space / action_space is determined by check_env()
         # observation_space is input of alg
         # action_space is output of alg
-        self.observation_space = spaces.Box(low=-self.map_size,high=self.map_size,shape=(5+2,),dtype=np.float32)
+        if USE_IMAGE_OBS:
+            self.obs_ratio = 16
+            self.observation_space = spaces.Box(low=0,high=255,shape=(3,self.map_size * self.obs_ratio,self.map_size * self.obs_ratio),dtype=np.float32)
+        else:
+            self.observation_space = spaces.Box(low=-self.map_size,high=self.map_size,shape=(5+2,),dtype=np.float32)
         self.action_space = spaces.Discrete(len(self.action_names))
         self.minimap, self.position = self._build_minimap(size = self.map_size)
         self.apple_position = self._put_apple()
@@ -69,7 +75,21 @@ class CEnv(gym.Env):
         d1 = (x0-x1)**2 + (y0-y1)**2
         return math.sqrt(min([d0,d1]))
     def _get_obs(self, anchor):
+        
+        apple_y,apple_x = self.apple_position
         ay,ax = anchor
+        if USE_IMAGE_OBS:
+            obs = self.minimap[:,:,None]
+            obs = np.concatenate([obs,obs,obs],axis=-1).astype(np.uint8)
+            obs = cv2.resize(obs,(self.map_size*self.obs_ratio, self.map_size*self.obs_ratio),0,0,cv2.INTER_NEAREST)
+            #print(obs.shape)
+            cx, cy = int((ax + 0.5) * self.obs_ratio), int((ay + 0.5) * self.obs_ratio)
+            cv2.circle(obs,(cx,cy), self.obs_ratio//2, (0,1,0),3)
+            cx, cy = int((apple_x + 0.5) * self.obs_ratio), int((apple_y + 0.5) * self.obs_ratio)
+            cv2.circle(obs,(cx,cy), self.obs_ratio//2, (0,1,1),3)
+            #cv2.imshow("obs_image",obs * 200)
+            #cv2.waitKey(-1) 
+            return obs.astype(np.float32).transpose(2,0,1)[None,:,:,:] * 255
         _,w = self.minimap.shape
         obs = np.zeros((5+2,),dtype=np.float32)
         for rx in range(ax-2,ax+3,1):
@@ -80,7 +100,6 @@ class CEnv(gym.Env):
                 ball_in_col = self.minimap[:,x].argmax()
             #obs[rx-ax+2] = self._calc_dist(anchor,(ball_in_col,rx),self.minimap.shape) + (ax==x)
             obs[rx-ax+2] = ball_in_col - ay + (ax==x)
-        apple_y,apple_x = self.apple_position
         if apple_y >= 0 and apple_x >= 0:
             #obs[-1] = self._calc_dist(self.apple_position, anchor,self.minimap.shape)
             obs[-2] = apple_x - ax
@@ -134,10 +153,8 @@ class CEnv(gym.Env):
              
     def reset(self):
         self.epoch += 1
-        if self.epoch > 1:
+        if SAVE_TRAJECTORY and self.epoch > 1:
             os.makedirs("trajectories",exist_ok=True)
-            #with open(os.path.join("trajectories",f"dodgeball_ep{self.epoch-1}.pkl"),"wb") as f:
-            #    pickle.dump(self.trajectory,f)
         
         random.seed(datetime.now().timestamp())
         self.minimap, self.position = self._build_minimap(size = self.map_size)
@@ -214,6 +231,5 @@ def test_env():
     env.close()
     
 if __name__ == "__main__":
-    is_env_ok()
     test_env()
 

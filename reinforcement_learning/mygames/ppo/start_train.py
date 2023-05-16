@@ -42,39 +42,98 @@ def to_torch(data):
         
 
 class ACPolicy(torch.nn.Module):
-    def __init__(self,input_dims, action_dims) -> None:
+    def __init__(self,input_shape, action_dims) -> None:
         super().__init__()
-        self.latent_dim = 64
-        self.actor = torch.nn.Sequential(
-            torch.nn.Linear(input_dims, 64),
-            torch.nn.Tanh(),
-            torch.nn.Linear(64, self.latent_dim),
-            torch.nn.Tanh(),
-            torch.nn.Linear(self.latent_dim, action_dims),
-        )
-        self.critic = torch.nn.Sequential(
-            torch.nn.Linear(input_dims, 64),
-            torch.nn.Tanh(),
-            torch.nn.Linear(64, self.latent_dim),
-            torch.nn.Tanh(),
-            torch.nn.Linear(self.latent_dim,1),
-        )
-        
-        for m in self.actor:
-            if isinstance(m, (torch.nn.Linear, torch.nn.Conv2d)):
-                torch.nn.init.orthogonal_(m.weight,gain=0.5)
-                if m.bias is not None:
-                    m.bias.data.fill_(0)
-        for m in self.critic:
-            if isinstance(m,(torch.nn.Linear, torch.nn.Conv2d)):
-                torch.nn.init.orthogonal_(m.weight,gain=0.5)
-                if m.bias is not None:
-                    m.bias.data.fill_(0)
-        
+        if len(input_shape) == 1:
+            input_dims = input_shape[0]
+            self.latent_dim = 64
+            self.actor = torch.nn.Sequential(
+                torch.nn.Linear(input_dims, 64),
+                torch.nn.Tanh(),
+                torch.nn.Linear(64, self.latent_dim),
+                torch.nn.Tanh(),
+                torch.nn.Linear(self.latent_dim, action_dims),
+            )
+            self.critic = torch.nn.Sequential(
+                torch.nn.Linear(input_dims, 64),
+                torch.nn.Tanh(),
+                torch.nn.Linear(64, self.latent_dim),
+                torch.nn.Tanh(),
+                torch.nn.Linear(self.latent_dim,1),
+            )
+            
+            for m in self.actor:
+                if isinstance(m, (torch.nn.Linear, torch.nn.Conv2d)):
+                    torch.nn.init.orthogonal_(m.weight,gain=0.5)
+                    if m.bias is not None:
+                        m.bias.data.fill_(0)
+            for m in self.critic:
+                if isinstance(m,(torch.nn.Linear, torch.nn.Conv2d)):
+                    torch.nn.init.orthogonal_(m.weight,gain=0.5)
+                    if m.bias is not None:
+                        m.bias.data.fill_(0)
+        elif len(input_shape) == 3: 
+            C,_,_ = input_shape
+            base_channel = 8
+            self.latent_dim = 64
+            self.actor_conv = torch.nn.Sequential(
+                torch.nn.Conv2d(C,base_channel,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(),
+                torch.nn.Conv2d(base_channel,base_channel*2,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(),
+                torch.nn.Conv2d(base_channel*2,base_channel*4,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(), 
+                torch.nn.Conv2d(base_channel*4,base_channel*8,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(),
+                torch.nn.AdaptiveMaxPool2d((1,1))
+            )
+            self.actor_fc = torch.nn.Sequential(
+                torch.nn.Linear(base_channel*8, action_dims),
+            )
+            self.critic_conv = torch.nn.Sequential(
+                torch.nn.Conv2d(C,base_channel,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(),
+                torch.nn.Conv2d(base_channel,base_channel*2,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(),
+                torch.nn.Conv2d(base_channel*2,base_channel*4,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(), 
+                torch.nn.Conv2d(base_channel*4,base_channel*8,kernel_size=3,stride=2,padding=1),
+                torch.nn.Tanh(),
+                torch.nn.AdaptiveMaxPool2d((1,1))
+            )
+            self.critic_fc = torch.nn.Sequential(
+                torch.nn.Linear(base_channel*8,1),
+            )
+            
+            
+            for m in self.actor_conv:
+                if isinstance(m, (torch.nn.Linear, torch.nn.Conv2d)):
+                    torch.nn.init.orthogonal_(m.weight,gain=0.5)
+                    if m.bias is not None:
+                        m.bias.data.fill_(0)
+            for m in self.actor_fc:
+                if isinstance(m, (torch.nn.Linear, torch.nn.Conv2d)):
+                    torch.nn.init.orthogonal_(m.weight,gain=0.5)
+                    if m.bias is not None:
+                        m.bias.data.fill_(0)
+            for m in self.critic_conv:
+                if isinstance(m,(torch.nn.Linear, torch.nn.Conv2d)):
+                    torch.nn.init.orthogonal_(m.weight,gain=0.5)
+                    if m.bias is not None:
+                        m.bias.data.fill_(0)
+            for m in self.critic_fc:
+                if isinstance(m,(torch.nn.Linear, torch.nn.Conv2d)):
+                    torch.nn.init.orthogonal_(m.weight,gain=0.5)
+                    if m.bias is not None:
+                        m.bias.data.fill_(0)
+        else:
+            assert(False),"input shape is not supported!"
         return
         
     def forward(self,x):
-        return self.critic(x),self.actor(x) 
+        cx, ax = self.critic_conv(x),self.actor_conv(x)
+        cx, ax = cx.view(cx.size()[0],-1), ax.view(ax.size()[0],-1)
+        return self.critic_fc(cx), self.actor_fc(ax)
     
 
 def logist2logsoftmax(logist):
@@ -135,7 +194,7 @@ class PPODataset(object):
             self.data["obs"].append(to_numpy(last_obs.cpu().detach().numpy()))
             self.data['reward'].append(to_numpy(reward))
             self.data['action'].append(action.numpy())
-            self.data['action_prob'].append(action_prob[action].numpy())
+            self.data['action_prob'].append(action_prob[0,action].numpy()) #batch size = 1
             self.data['value'].append(value.numpy())
             self.data['gameover'].append(1 if gameover else 0)
             last_obs = to_torch(obs).to(device)
@@ -184,7 +243,7 @@ class PPODataset(object):
             ###################################
             #log_prob is wrt action !
             log_prob.append(torch.log(action_prob))
-        obs = torch.cat([torch.reshape(x,(1,-1)) for x in obs],dim=0)
+        obs = torch.cat(obs,dim=0)
         adv = torch.cat([torch.reshape(x,(1,-1)) for x in adv],dim=0)
         log_prob = torch.cat([torch.reshape(x,(1,-1)) for x in log_prob],dim=0)
         gain = torch.cat([torch.reshape(x,(1,-1)) for x in gain],dim=0)
@@ -196,7 +255,7 @@ def main():
     dataset = PPODataset(env)
     obs_space= env.observation_space
     action_space = env.action_space
-    policy = ACPolicy(input_dims = obs_space.shape[0],action_dims=action_space.n)
+    policy = ACPolicy(input_shape = obs_space.shape,action_dims=action_space.n)
     policy.to(device)
    
     loss_mse = torch.nn.MSELoss()
