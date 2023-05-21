@@ -10,15 +10,19 @@ from zipfile import ZipFile
 from rich.progress import track
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
+import fire
+from hargs import HARGS
 
-
-def copy2zip(indir, exts, outpath):
+def copy2zip(indir, exts, files,outpath):
     fd = ZipFile(outpath,"a")
     for rdir, _, names in os.walk(indir):
         paths = [os.path.join(rdir,name) for name in names if os.path.splitext(name)[-1] in exts]
         for path in paths:
             rpath = os.path.relpath(path,indir)
             fd.write(path,rpath)
+    for path in files:
+        rpath = os.path.relpath(path,indir)
+        fd.write(path,rpath) 
     fd.close()
     return
 
@@ -42,7 +46,7 @@ def to_torch(data):
         
 
 class ACPolicy(torch.nn.Module):
-    def __init__(self,input_shape, action_dims) -> None:
+    def __init__(self,input_shape, action_dims,hparam) -> None:
         super().__init__()
         if len(input_shape) == 1:
             input_dims = input_shape[0]
@@ -73,38 +77,72 @@ class ACPolicy(torch.nn.Module):
                     if m.bias is not None:
                         m.bias.data.fill_(0)
         elif len(input_shape) == 3: 
-            C,_,_ = input_shape
-            base_channel = 8
-            self.latent_dim = 64
-            self.actor_conv = torch.nn.Sequential(
-                torch.nn.Conv2d(C,base_channel,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(),
-                torch.nn.Conv2d(base_channel,base_channel*2,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(),
-                torch.nn.Conv2d(base_channel*2,base_channel*4,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(), 
-                torch.nn.Conv2d(base_channel*4,base_channel*8,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(),
-                torch.nn.AdaptiveMaxPool2d((1,1))
-            )
+            C,H,W = input_shape
+            base_channel = hparam.get("channel_base",8)
+            actor_cnn = []
+            last_out_ch = base_channel
+            for n,name in enumerate(hparam.get("backbone")):
+                if name.split(',')[0] == "conv":
+                    kernel,stride,padding = [int(n) for n in name.split(',')[1:]]
+                    if n == 0:
+                        actor_cnn.append(torch.nn.Conv2d(C,base_channel,kernel_size=kernel,
+                                                         stride=stride,padding=padding))
+                        last_out_ch = base_channel
+                    else:
+                        actor_cnn.append(torch.nn.Conv2d(last_out_ch,last_out_ch*2,kernel_size=kernel,
+                                                         stride=stride,padding=padding))
+                        last_out_ch = 2 * last_out_ch
+                elif name == 'relu':
+                    actor_cnn.append(torch.nn.ReLU())
+                elif name == "tanh":
+                    actor_cnn.append(torch.nn.Tanh())
+                elif name == 'adaptivemaxpool':
+                    actor_cnn.append(torch.nn.AdaptiveMaxPool2d((1,1)))
+                else: 
+                    assert(False),"not supported layer: {}".foramt(name)
+            self.actor_conv = torch.nn.Sequential(*actor_cnn)
+            # with torch.no_grad():
+            #     flatten_dim = self.actor_conv(torch.zeros(1,C,H,W)).shape[1]
+            # self.actor_fc = torch.nn.Sequential(
+            #     torch.nn.Linear(flatten_dim, action_dims),
+            # )
             self.actor_fc = torch.nn.Sequential(
-                torch.nn.Linear(base_channel*8, action_dims),
+                torch.nn.Linear(last_out_ch, action_dims),
             )
-            self.critic_conv = torch.nn.Sequential(
-                torch.nn.Conv2d(C,base_channel,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(),
-                torch.nn.Conv2d(base_channel,base_channel*2,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(),
-                torch.nn.Conv2d(base_channel*2,base_channel*4,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(), 
-                torch.nn.Conv2d(base_channel*4,base_channel*8,kernel_size=3,stride=2,padding=1),
-                torch.nn.Tanh(),
-                torch.nn.AdaptiveMaxPool2d((1,1))
-            )
-            self.critic_fc = torch.nn.Sequential(
-                torch.nn.Linear(base_channel*8,1),
-            )
+            print(self.actor_conv)
             
+            critic_cnn = []
+            last_out_ch = base_channel
+            for n,name in enumerate(hparam.get("backbone")):
+                if name.split(',')[0] == "conv":
+                    kernel,stride,padding = [int(n) for n in name.split(',')[1:]]
+                    if n == 0:
+                        critic_cnn.append(torch.nn.Conv2d(C,base_channel,kernel_size=kernel,
+                                                         stride=stride,padding=padding))
+                        last_out_ch = base_channel
+                    else:
+                        critic_cnn.append(torch.nn.Conv2d(last_out_ch,last_out_ch*2,kernel_size=kernel,
+                                                         stride=stride,padding=padding))
+                        last_out_ch = 2 * last_out_ch
+                elif name == 'relu':
+                    critic_cnn.append(torch.nn.ReLU())
+                elif name == "tanh":
+                    critic_cnn.append(torch.nn.Tanh())
+                elif name == 'adaptivemaxpool':
+                    critic_cnn.append(torch.nn.AdaptiveMaxPool2d((1,1)))    
+                else: 
+                    assert(False),"not supported layer: {}".foramt(name)
+  
+            self.critic_conv = torch.nn.Sequential(*critic_cnn)
+            print(self.critic_conv)
+            # with torch.no_grad():
+            #     flatten_dim = self.critic_conv(torch.zeros((1,C,H,W))).shape[-1]
+            # self.critic_fc = torch.nn.Sequential(
+            #     torch.nn.Linear(flatten_dim,1),
+            # )
+            self.critic_fc = torch.nn.Sequential(
+                torch.nn.Linear(last_out_ch,1),
+            )
             
             for m in self.actor_conv:
                 if isinstance(m, (torch.nn.Linear, torch.nn.Conv2d)):
@@ -249,13 +287,18 @@ class PPODataset(object):
         gain = torch.cat([torch.reshape(x,(1,-1)) for x in gain],dim=0)
         return obs,adv,gain,log_prob,action
 
-def main():
+def main_one(yaml_file):
+    hparam = HARGS(yaml_file)
+    if hparam.get("use_rand_seed",0):
+        np.random.seed(224)  
+        torch.manual_seed(224)
+
     device = torch.device("cuda:0")
-    env = dodgeball.CEnv()
+    env = dodgeball.CEnv(hparam)
     dataset = PPODataset(env)
     obs_space= env.observation_space
     action_space = env.action_space
-    policy = ACPolicy(input_shape = obs_space.shape,action_dims=action_space.n)
+    policy = ACPolicy(input_shape = obs_space.shape,action_dims=action_space.n, hparam = hparam)
     policy.to(device)
    
     loss_mse = torch.nn.MSELoss()
@@ -263,7 +306,7 @@ def main():
     
      
     batch_size = 128
-    total_epochs = 100
+    total_epochs = 50
     iters_each_epoch = 1000
     steps_each_collect = 512
     
@@ -272,9 +315,10 @@ def main():
     optim = torch.optim.Adam(policy.parameters(),lr=0.0003,eps=1e-5)
     #lr = torch.optim.lr_scheduler.CosineAnnealingLR(optim,eta_min=1e-9,last_epoch=-1, T_max=total_epochs * iters_each_epoch)
     workdir = os.path.dirname(os.path.abspath(__file__))
-    outdir = os.path.join(workdir,"exp",time.strftime("%Y%m%d_%H%M",time.localtime()))
+    hpname = os.path.splitext(os.path.basename(yaml_file))[0]
+    outdir = os.path.join(workdir,"exp","{}_{}".format(time.strftime("%Y%m%d_%H%M",time.localtime()),hpname))
     os.makedirs(outdir,exist_ok=True)
-    copy2zip(workdir,{".py"}, os.path.join(outdir,"codes.zip"))
+    copy2zip(workdir,{".py"}, [yaml_file],  os.path.join(outdir,"codes.zip"))
     writer = SummaryWriter(outdir)
     step_num = 0
     for epoch in range(total_epochs):
@@ -313,7 +357,8 @@ def main():
             ent = -(log_prob_all * torch.exp(log_prob_all)).sum(dim=-1).mean()
             loss_ent = -ent
             
-            loss = 1 * (loss_adv + 0.5 * loss_value + 0.00 * loss_ent)
+            loss = loss_adv * hparam.get('adv_loss_weight',1.0) + hparam.get('value_loss_weight') * loss_value \
+                + hparam.get('ent_loss_weight',0) * loss_ent
             
             optim.zero_grad()
             loss.backward()
@@ -353,8 +398,22 @@ def main():
                  
     writer.close()         
          
-
+def main(files_or_dir):
+    if files_or_dir[0] == '.':
+        files_or_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),files_or_dir)
+    hparam_files = []
+    assert(os.path.exists(files_or_dir)), "{} must exist".format(files_or_dir)
+    if os.path.isfile(files_or_dir) and os.path.splitext(files_or_dir)[-1].lower() in {'.yaml','.yml'}:
+        hparam_files.append(files_or_dir)
+    elif os.path.isdir(files_or_dir):
+        hparam_files = [os.path.join(files_or_dir,f) for f in os.listdir(files_or_dir) \
+            if os.path.splitext(f)[-1].lower() in {'.yml','.yaml'}]
+    else:
+        print("bad intpu {}".format(files_or_dir))
+    print(hparam_files)
+    for hparam_file in hparam_files:
+        main_one(hparam_file)
 if __name__ == "__main__":
-    main() 
+    fire.Fire(main)
             
               
