@@ -306,7 +306,7 @@ def main_one(yaml_file):
     
      
     batch_size = 128
-    total_epochs = 50
+    total_epochs = hparam.get("total_epochs",50)
     iters_each_epoch = 1000
     steps_each_collect = 512
     
@@ -346,11 +346,7 @@ def main_one(yaml_file):
             if advantage.shape[0] > 1:
                 advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
             ratio = torch.exp(log_prob - log_prob_gt)
-            if 0:
-                ratio = torch.min(torch.clamp(ratio,1-0.2, 1 + 0.2),ratio)
-                loss_adv = -(ratio * advantage).mean()
-            else:
-                loss_adv = -1 * torch.min(torch.clamp(ratio,1-0.2, 1 + 0.2) * advantage,ratio*advantage).mean()
+            loss_adv = -1 * torch.min(torch.clamp(ratio,1-0.2, 1 + 0.2) * advantage,ratio*advantage).mean()
 
             
             #3--loss log_prob(negative entropy. do not push entropy to zero)
@@ -414,6 +410,7 @@ def main(files_or_dir):
     for hparam_file in hparam_files:
         main_one(hparam_file)
 if __name__ == "__main__":
+    #main("./hargs/0001c3d1b.yaml")
     fire.Fire(main)
             
               

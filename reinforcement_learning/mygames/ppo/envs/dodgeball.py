@@ -14,6 +14,7 @@ from datetime import datetime
 import pickle
 import copy
 
+
 SAVE_TRAJECTORY = False
 
 USE_IMAGE_OBS = True
@@ -23,9 +24,9 @@ class CEnv(gym.Env):
     metadata = {"render_modes":["human"],"render_fps":4}
     def __init__(self,hparam):
         super().__init__()
-        random.seed(datetime.now().timestamp())
+        #random.seed(datetime.now().timestamp())
         self.action_names = ["up","down","left","right"]
-        self.map_size = 16
+        self.map_size = hparam.get("map_size",16)
         self.hparam = hparam
         # name of observation_space / action_space is determined by check_env()
         # observation_space is input of alg
@@ -98,9 +99,12 @@ class CEnv(gym.Env):
                             
             cx, cy = int((ax + 0.5) * self.obs_ratio), int((ay + 0.5) * self.obs_ratio)
             cv2.circle(obs,(cx,cy), self.obs_ratio//2, (0,1,0),3)
+            #print(ax,ay, cx,cy)
             cx, cy = int((apple_x + 0.5) * self.obs_ratio), int((apple_y + 0.5) * self.obs_ratio)
             cv2.circle(obs,(cx,cy), self.obs_ratio//2, (0,1,1),3)
             self.obs_vis = copy.deepcopy(obs)
+            #cv2.imshow("obs",obs * 255)
+            #cv2.waitKey(-1)
             return obs.astype(np.float32).transpose(2,0,1)[None,:,:,:] \
                 * (self.hparam.get('env_obs_max',255) - self.hparam.get('env_obs_min',0)) + self.hparam.get('env_obs_min',0)
         _,w = self.minimap.shape
@@ -172,10 +176,10 @@ class CEnv(gym.Env):
         self.epoch += 1
         if SAVE_TRAJECTORY and self.epoch > 1:
             os.makedirs("trajectories",exist_ok=True)
-        random.seed(datetime.now().timestamp())
+        #random.seed(datetime.now().timestamp())
         self.minimap, self.position = self._build_minimap(size = self.map_size)
-        H,W = self.minimap.shape[0:2]
-        H,W = int(H * self.obs_ratio), int(W * self.obs_ratio)
+        #H,W = self.minimap.shape[0:2]
+        #H,W = int(H * self.obs_ratio), int(W * self.obs_ratio)
         self.apple_position = self._put_apple()
         obs = self._get_obs(self.position)
         self.trajectory = {
@@ -198,7 +202,7 @@ class CEnv(gym.Env):
             raise Exception(f"no obs")
         if USE_IMAGE_OBS:
             cv2.imshow("game",self.obs_vis*255)
-            cv2.waitKey(10)
+            cv2.waitKey(5)
             return 
             
         if SAVE_TRAJECTORY:
@@ -240,9 +244,23 @@ class CEnv(gym.Env):
         
         cv2.destroyAllWindows()
 
+
+import yaml
+
+class HARGS_T:
+    def __init__(self, path) -> None:
+        with open(path,'r') as f:
+            self.data = yaml.load(f,Loader=yaml.FullLoader)
+        return
+    def get(self,key,default_value=None):
+        if key in self.data.keys():
+            return self.data[key]
+        print("not set hyper-param : {}".format(key))
+        return default_value
     
 def test_env():
-    env = CEnv()
+    hpt = HARGS_T("../hargs/0001c3d1b.yaml")
+    env = CEnv(hpt)
     obs = env.reset()
     for _ in range(10000):
         act = env.action_space.sample()
