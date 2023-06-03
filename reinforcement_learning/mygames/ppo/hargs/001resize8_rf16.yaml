@@ -1,0 +1,23 @@
+use_rand_seed: 0
+
+channel_base: 8
+backbone:
+    - "conv,3,2,1"
+    - "tanh"
+    - "conv,3,2,1"
+    - "tanh"
+    - "conv,3,2,1"
+    - "tanh"
+    - "conv,3,2,1"
+    - "tanh"
+    - "adaptivemaxpool"
+    - "tanh"
+
+ent_loss_weight: 0.0
+value_loss_weight: 0.5
+adv_loss_weight: 1.0
+
+env_obs_custom_draw: 0
+env_obs_resize_ratio: 8
+env_obs_min: 0
+env_obs_max: 255

@@ -98,16 +98,15 @@ class ACPolicy(torch.nn.Module):
                     actor_cnn.append(torch.nn.Tanh())
                 elif name == 'adaptivemaxpool':
                     actor_cnn.append(torch.nn.AdaptiveMaxPool2d((1,1)))
+                elif name == "flatten":
+                    actor_cnn.append(torch.nn.Flatten())
                 else: 
                     assert(False),"not supported layer: {}".foramt(name)
             self.actor_conv = torch.nn.Sequential(*actor_cnn)
-            # with torch.no_grad():
-            #     flatten_dim = self.actor_conv(torch.zeros(1,C,H,W)).shape[1]
-            # self.actor_fc = torch.nn.Sequential(
-            #     torch.nn.Linear(flatten_dim, action_dims),
-            # )
+            with torch.no_grad():
+                cnn_out_channel = self.actor_conv(torch.zeros(1,C,H,W)).shape[1]
             self.actor_fc = torch.nn.Sequential(
-                torch.nn.Linear(last_out_ch, action_dims),
+                torch.nn.Linear(cnn_out_channel, action_dims),
             )
             print(self.actor_conv)
             
@@ -130,18 +129,17 @@ class ACPolicy(torch.nn.Module):
                     critic_cnn.append(torch.nn.Tanh())
                 elif name == 'adaptivemaxpool':
                     critic_cnn.append(torch.nn.AdaptiveMaxPool2d((1,1)))    
+                elif name == "flatten":
+                    critic_cnn.append(torch.nn.Flatten())
                 else: 
                     assert(False),"not supported layer: {}".foramt(name)
   
             self.critic_conv = torch.nn.Sequential(*critic_cnn)
             print(self.critic_conv)
-            # with torch.no_grad():
-            #     flatten_dim = self.critic_conv(torch.zeros((1,C,H,W))).shape[-1]
-            # self.critic_fc = torch.nn.Sequential(
-            #     torch.nn.Linear(flatten_dim,1),
-            # )
+            with torch.no_grad():
+                cnn_out_channel = self.critic_conv(torch.zeros((1,C,H,W))).shape[1]
             self.critic_fc = torch.nn.Sequential(
-                torch.nn.Linear(last_out_ch,1),
+                torch.nn.Linear(cnn_out_channel,1),
             )
             
             for m in self.actor_conv:
@@ -308,15 +306,13 @@ def main_one(yaml_file):
     batch_size = 128
     total_epochs = hparam.get("total_epochs",50)
     iters_each_epoch = 1000
-    steps_each_collect = 512
+    steps_each_collect = hparam.get("steps_each_collect",100)
     
     
-    #optim = torch.optim.SGD(policy.parameters(),lr=0.001,momentum=0.9, weight_decay=1e-5)
-    optim = torch.optim.Adam(policy.parameters(),lr=0.0003,eps=1e-5)
-    #lr = torch.optim.lr_scheduler.CosineAnnealingLR(optim,eta_min=1e-9,last_epoch=-1, T_max=total_epochs * iters_each_epoch)
+    optim = torch.optim.Adam(policy.parameters(),lr=hparam.get("lr",0.0003),eps=1e-5)
     workdir = os.path.dirname(os.path.abspath(__file__))
     hpname = os.path.splitext(os.path.basename(yaml_file))[0]
-    outdir = os.path.join(workdir,"exp","{}_{}".format(time.strftime("%Y%m%d_%H%M",time.localtime()),hpname))
+    outdir = os.path.join(workdir,"exp","{}_{}".format(hpname,time.strftime("%Y%m%d_%H%M",time.localtime())))
     os.makedirs(outdir,exist_ok=True)
     copy2zip(workdir,{".py"}, [yaml_file],  os.path.join(outdir,"codes.zip"))
     writer = SummaryWriter(outdir)
@@ -383,6 +379,7 @@ def main_one(yaml_file):
                 _,action_logist = policy(last_obs)
                 action = torch.argmax(action_logist).cpu().item()  
                 last_obs,reward,gameover,info = env.step(action)  
+                env.render()
                 if gameover:
                     break
                 lifetime_sum += 1
@@ -406,6 +403,7 @@ def main(files_or_dir):
             if os.path.splitext(f)[-1].lower() in {'.yml','.yaml'}]
     else:
         print("bad intpu {}".format(files_or_dir))
+    hparam_files = sorted(hparam_files)
     print(hparam_files)
     for hparam_file in hparam_files:
         main_one(hparam_file)
