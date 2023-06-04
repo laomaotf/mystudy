@@ -2,7 +2,7 @@ import os,sys
 import torch
 import gym
 import numpy as np
-from envs import dodgeball
+from envs import dodgeball,dodgeball2
 import torch.functional as F
 import copy
 import time
@@ -292,7 +292,8 @@ def main_one(yaml_file):
         torch.manual_seed(224)
 
     device = torch.device("cuda:0")
-    env = dodgeball.CEnv(hparam)
+    env_name = yaml_file.split(os.path.sep)[-2]
+    env = eval(f"{env_name}.CEnv(hparam)")
     dataset = PPODataset(env)
     obs_space= env.observation_space
     action_space = env.action_space
